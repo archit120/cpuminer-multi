@@ -174,7 +174,7 @@ struct scratchpad_hi
 };
 struct addendum
 {
-    scratchpad_hi hi;
+    	struct scratchpad_hi hi;
 	unsigned char prev_id[32];
 	unsigned char addm[128];
 };
@@ -502,10 +502,71 @@ static bool work_decode(const json_t *val, struct work *work) {
     err_out: return false;
 }
 
+
+const char* get_json_string_param(const json_t *val, const char* param_name)
+{
+  json_t *tmp;
+  tmp = json_object_get(val, param_name);
+  if(!tmp) {
+    return NULL;
+  }
+  return json_string_value(tmp);
+}
+
+
+bool parse_height_info(const json_t *hi_section, struct scratchpad_hi* phi)
+{
+  if(!phi || !hi_section)
+  {
+    applog(LOG_ERR, "parse_height_info: wrong params");
+    goto err_out;
+  }
+  json_t *height = json_object_get(hi_section, "height");
+  if(!height) {
+    applog(LOG_ERR, "JSON inval hi, no height param");
+    goto err_out;
+  }
+
+  if(!json_is_integer(height))
+  {
+    applog(LOG_ERR, "JSON inval hi: height is not integer ");
+    goto err_out;
+  }
+
+  uint64_t hi_h = (uint64_t)json_integer_value(height);
+  if(!hi_h)
+  {
+    applog(LOG_ERR, "JSON inval hi: height is 0");
+    goto err_out;
+  }
+
+  const char* block_id = get_json_string_param(hi_section, "block_id");
+  if(!block_id) {
+    applog(LOG_ERR, "JSON inval hi: block_id not found ");
+    goto err_out;
+  }
+
+  unsigned char prevhash[32] = {};
+  size_t len = hex2bin_len(prevhash, block_id, 32);
+  if(len != 32)
+  {
+    applog(LOG_ERR, "JSON inval hi: block_id wrong len %d", len);
+    goto err_out;
+  }
+
+  phi->height = hi_h;
+  memcpy(phi->prevhash, prevhash, 32);
+
+  return true;
+err_out: 
+  return false;
+}
+
 void apply_addendums(const struct addendum* list, size_t size)
 {
 	
 }
+
 
 bool rpc2_login_decode(const json_t *val) {
   const char *id;
@@ -566,7 +627,7 @@ bool rpc2_login_decode(const json_t *val) {
 				goto err_out;
 			}
 
-			size_t len = hex2bin_len(addms.addm, prev_id, 128);
+			len = hex2bin_len(addms.addm, prev_id, 128);
 			if(len != 128)
 			{
 				applog(LOG_ERR, "JSON inval addms: addm wrong len %d", len);
@@ -597,64 +658,6 @@ bool rpc2_login_decode(const json_t *val) {
 err_out: return false;
 }
 
-const char* get_json_string_param(const json_t *val, const char* param_name)
-{
-  json_t *tmp;
-  tmp = json_object_get(val, param_name);
-  if(!tmp) {
-    return NULL;
-  }
-  return json_string_value(tmp);
-}
-
-
-bool parse_height_info(const json_t *hi_section, struct scratchpad_hi* phi)
-{
-  if(!phi || !hi_section)
-  {
-    applog(LOG_ERR, "parse_height_info: wrong params");
-    goto err_out;
-  }
-  json_t *height = json_object_get(hi_section, "height");
-  if(!height) {
-    applog(LOG_ERR, "JSON inval hi, no height param");
-    goto err_out;
-  }
-
-  if(!json_is_integer(height))
-  {
-    applog(LOG_ERR, "JSON inval hi: height is not integer ");
-    goto err_out;
-  }
-
-  uint64_t hi_h = (uint64_t)json_integer_value(height);
-  if(!hi_h)
-  {
-    applog(LOG_ERR, "JSON inval hi: height is 0");
-    goto err_out;
-  }
-
-  const char* block_id = get_json_string_param(hi_section, "block_id");
-  if(!block_id) {
-    applog(LOG_ERR, "JSON inval hi: block_id not found ");
-    goto err_out;
-  }
-
-  unsigned char prevhash[32] = {};
-  size_t len = hex2bin_len(prevhash, block_id, 32);
-  if(len != 32)
-  {
-    applog(LOG_ERR, "JSON inval hi: block_id wrong len %d", len);
-    goto err_out;
-  }
-
-  phi->height = hi_h;
-  memcpy(phi->prevhash, prevhash, 32);
-
-  return true;
-err_out: 
-  return false;
-}
 
 bool rpc2_getfullscratchpad_decode(const json_t *val) {
     const char *id;
@@ -783,7 +786,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
 			case ALGO_WILD_KECCAK:
 				noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
                 wildkeccak_hash(hash, work->data, 85, pscratchpad_buff, scratchpad_size);
-				break
+				break;
 			default:
 				break;
             }
@@ -823,7 +826,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
 			case ALGO_WILD_KECCAK:
 				noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
                 wildkeccak_hash(hash, work->data, 85, pscratchpad_buff, scratchpad_size);
-				break
+				break;
 			default:
 				break;
             }
@@ -891,15 +894,16 @@ static bool get_upstream_work(CURL *curl, struct work *work) {
 
     if(jsonrpc_2) {
         char s[128];
+			    char *prevhash = 0;
 		switch(opt_algo) {
             case ALGO_CRYPTONIGHT:
 				snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
 				break;
 			case ALGO_WILD_KECCAK:
-			    char *prevhash = bin2hex(current_scratchpad_hi.prevhash, 32);
+			    prevhash = bin2hex(current_scratchpad_hi.prevhash, 32);
 			    snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\", \"prev_hi\": { \"height\": %d, \"block_id\": \"%s\"}}, \"id\":1}\r\n", rpc2_id, current_scratchpad_hi.height, prevhash);
 				free(prevhash);
-				break
+				break;
 			default:
 				break;
             }        
@@ -946,7 +950,7 @@ static bool rpc2_login(CURL *curl) {
 				break;
 			case ALGO_WILD_KECCAK:
 				snprintf(s, JSON_BUF_LEN, "{\"method\": \"login\", \"params\": {\"login\": \"%s\", \"pass\": \"%s\", \"agent\": \"cpuminer-multi/0.1, \"hi\": { \"height\": 0, \"block_id\": \"0000000000000000000000000000000000000000000000000000000000000000\"}\"}, \"id\": 1}", rpc_user, rpc_pass);
-				break
+				break;
 			default:
 				break;
             }        
@@ -1166,6 +1170,8 @@ static void *workio_thread(void *userdata) {
     }
 
 
+        struct workio_cmd *wc;
+
     if(opt_algo == ALGO_WILD_KECCAK) {
       ok = workio_getscratchpad(curl);
 	  //Get the work now!
@@ -1175,7 +1181,7 @@ static void *workio_thread(void *userdata) {
 
 
     while (ok) {
-        struct workio_cmd *wc;
+
 
         /* wait for workio_cmd sent to us, on our queue */
         wc = tq_pop(mythr->q, NULL );
@@ -1601,15 +1607,16 @@ static void *longpoll_thread(void *userdata) {
                 continue;
             }
             char s[128];
+			    char* prevhash = 0;
 			switch(opt_algo) {
             case ALGO_CRYPTONIGHT:
 				snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
 				break;
 			case ALGO_WILD_KECCAK:
-			    char *prevhash = bin2hex(current_scratchpad_hi.prevhash, 32);
+			    prevhash = bin2hex(current_scratchpad_hi.prevhash, 32);
 			    snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\", \"prev_hi\": { \"height\": %d, \"block_id\": \"%s\"}}, \"id\":1}\r\n", rpc2_id, current_scratchpad_hi.height, prevhash);
 				free(prevhash);
-				break
+				break;
 			default:
 				break;
             }        

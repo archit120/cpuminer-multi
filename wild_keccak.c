@@ -16,7 +16,8 @@ void wildkeccak_hash(void* output, const void* input, size_t len, uint64_t* scra
 }
 
 int scanhash_wild_keccak(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
-        uint32_t max_nonce, unsigned long *hashes_done, uint64_t* scratchpad, uint64_t scratchsize) {
+        uint32_t max_nonce, unsigned long *hashes_done, uint64_t* scratchpad, uint64_t scratchsize) 
+{
     uint32_t *nonceptr = (uint32_t*) (((char*)pdata) + 1);
     uint32_t n = *nonceptr - 1;
     const uint32_t first_nonce = n + 1;
@@ -27,11 +28,10 @@ int scanhash_wild_keccak(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
             wild_keccak_dbl_opt(pdata, hash, 81, scratchpad, scratchsize);
             if (unlikely(hash[7] < ptarget[7])) {
                 *hashes_done = n - first_nonce + 1;
-                free(ctx);
                 return true;
             }
         } while (likely((n <= max_nonce && !work_restart[thr_id].restart)));
-    }
+    
     
     *hashes_done = n - first_nonce + 1;
     return 0;
