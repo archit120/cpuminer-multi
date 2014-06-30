@@ -11,6 +11,10 @@ void wild_keccak_dbl_opt(const uint32_t *in, uint32_t *md, size_t inlen, uint64_
     Hash(256, (const uint8_t*)md, 32*8, (const uint8_t*)md, pscr, scr_sz);
 }
 
+void wildkeccak_hash(void* output, const void* input, size_t len, uint64_t* scratchpad, uint64_t scratchsize) {
+	wild_keccak_dbl_opt((const uint32_t*)input, (const uint32_t*)output, 81, scratchpad, scratchsize);
+}
+
 int scanhash_wild_keccak(int thr_id, uint32_t *pdata, const uint32_t *ptarget,
         uint32_t max_nonce, unsigned long *hashes_done, uint64_t* scratchpad, uint64_t scratchsize) {
     uint32_t *nonceptr = (uint32_t*) (((char*)pdata) + 1);

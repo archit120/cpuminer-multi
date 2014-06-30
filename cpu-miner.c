@@ -172,7 +172,12 @@ struct scratchpad_hi
   unsigned char prevhash[32];
   uint64_t height;
 };
-
+struct addendum
+{
+    scratchpad_hi hi;
+	unsigned char prev_id[32];
+	unsigned char addm[128];
+};
 static uint64_t* pscratchpad_buff = NULL;
 static uint64_t  scratchpad_size = 0;
 struct scratchpad_hi current_scratchpad_hi = {0};
@@ -497,6 +502,11 @@ static bool work_decode(const json_t *val, struct work *work) {
     err_out: return false;
 }
 
+void apply_addendums(const struct addendum* list, size_t size)
+{
+	
+}
+
 bool rpc2_login_decode(const json_t *val) {
   const char *id;
   const char *s;
@@ -524,6 +534,49 @@ bool rpc2_login_decode(const json_t *val) {
   if(opt_debug)
     applog(LOG_DEBUG, "Auth id: %s", id);
 
+	//Apply addendum some where over here
+	
+	if(opt_algo == ALGO_WILD_KECCAK)
+	{
+		tmp = json_object_get(res, "addms");
+		size_t addms_size = json_array_size(tmp);
+		struct addendum* addms_list = malloc(sizeof(struct addendum) * addms_size);
+		int loop = 0;
+		for(loop = 0; loop < addms_size; loop++)
+		{
+			json_t* tmp2 = json_array_get(tmp, loop);
+			struct addendum addms;
+			parse_height_info(json_object_get(res, "hi"), &addms.hi);
+   		    const char* prev_id = get_json_string_param(tmp2, "prev_id");
+			if(!prev_id) {
+				applog(LOG_ERR, "JSON inval addms: prev_id not found ");
+				goto err_out;
+			}
+
+			size_t len = hex2bin_len(addms.prev_id, prev_id, 32);
+			if(len != 32)
+			{
+				applog(LOG_ERR, "JSON inval addms: prev_id wrong len %d", len);
+				goto err_out;
+			}	
+			
+			const char* addm = get_json_string_param(tmp2, "addm");
+			if(!addm) {
+				applog(LOG_ERR, "JSON inval addms: addm not found ");
+				goto err_out;
+			}
+
+			size_t len = hex2bin_len(addms.addm, prev_id, 128);
+			if(len != 128)
+			{
+				applog(LOG_ERR, "JSON inval addms: addm wrong len %d", len);
+				goto err_out;
+			}
+			
+			addms_list[loop] = addms;
+		}
+	}
+	
   tmp = json_object_get(res, "status");
   if(!tmp) {
     applog(LOG_ERR, "JSON inval status");
@@ -729,7 +782,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
 				break;
 			case ALGO_WILD_KECCAK:
 				noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
-                wildkeccak_hash(hash, work->data, 85);
+                wildkeccak_hash(hash, work->data, 85, pscratchpad_buff, scratchpad_size);
 				break
 			default:
 				break;
@@ -769,7 +822,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
 				break;
 			case ALGO_WILD_KECCAK:
 				noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
-                wildkeccak_hash(hash, work->data, 85);
+                wildkeccak_hash(hash, work->data, 85, pscratchpad_buff, scratchpad_size);
 				break
 			default:
 				break;
@@ -913,20 +966,26 @@ static bool rpc2_login(CURL *curl) {
 
     if(!result) goto end;
 
-    json_t *job = json_object_get(result, "job");
+	// The first job is a bunch of useless information because of 0 height info
+	
+	if(opt_algo == ALGO_WILD_KECCAK)
+	{
+		
+		json_t *job = json_object_get(result, "job");
 
-    if(!rpc2_job_decode(job, &g_work)) {
-        goto end;
-    }
+		if(!rpc2_job_decode(job, &g_work)) {
+			goto end;
+		}
 
-    if (opt_debug && rc) {
-        timeval_subtract(&diff, &tv_end, &tv_start);
-        applog(LOG_DEBUG, "DEBUG: authenticated in %d ms",
-                diff.tv_sec * 1000 + diff.tv_usec / 1000);
-    }
-
-    json_decref(val);
-
+		if (opt_debug && rc) {
+			timeval_subtract(&diff, &tv_end, &tv_start);
+			applog(LOG_DEBUG, "DEBUG: authenticated in %d ms",
+					diff.tv_sec * 1000 + diff.tv_usec / 1000);
+		}
+	}
+	
+	json_decref(val);
+	
     end:
     return rc;
 }
@@ -1109,6 +1168,8 @@ static void *workio_thread(void *userdata) {
 
     if(opt_algo == ALGO_WILD_KECCAK) {
       ok = workio_getscratchpad(curl);
+	  //Get the work now!
+	  ok = workio_get_work(wc, curl);
     }
 
 
