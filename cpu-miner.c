@@ -721,12 +721,18 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
         char *ntimestr, *noncestr, *xnonce2str;
 
         if (jsonrpc_2) {
-            noncestr = bin2hex(((const unsigned char*)work->data) + 39, 4);
             char hash[32];
             switch(opt_algo) {
             case ALGO_CRYPTONIGHT:
-            default:
-                cryptonight_hash(hash, work->data, 76);
+			    noncestr = bin2hex(((const unsigned char*)work->data) + 39, 4);
+			    cryptonight_hash(hash, work->data, 76);
+				break;
+			case ALGO_WILD_KECCAK:
+				noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
+                wildkeccak_hash(hash, work->data, 85);
+				break
+			default:
+				break;
             }
             char *hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
@@ -758,8 +764,15 @@ static bool submit_upstream_work(CURL *curl, struct work *work) {
             char hash[32];
             switch(opt_algo) {
             case ALGO_CRYPTONIGHT:
-            default:
-                cryptonight_hash(hash, work->data, 76);
+			    noncestr = bin2hex(((const unsigned char*)work->data) + 39, 4);
+			    cryptonight_hash(hash, work->data, 76);
+				break;
+			case ALGO_WILD_KECCAK:
+				noncestr = bin2hex(((const unsigned char*)work->data) + 1, 8);
+                wildkeccak_hash(hash, work->data, 85);
+				break
+			default:
+				break;
             }
             char *hashhex = bin2hex(hash, 32);
             snprintf(s, JSON_BUF_LEN,
@@ -825,7 +838,18 @@ static bool get_upstream_work(CURL *curl, struct work *work) {
 
     if(jsonrpc_2) {
         char s[128];
-        snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
+		switch(opt_algo) {
+            case ALGO_CRYPTONIGHT:
+				snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
+				break;
+			case ALGO_WILD_KECCAK:
+			    char *prevhash = bin2hex(current_scratchpad_hi.prevhash, 32);
+			    snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\", \"prev_hi\": { \"height\": %d, \"block_id\": \"%s\"}}, \"id\":1}\r\n", rpc2_id, current_scratchpad_hi.height, prevhash);
+				free(prevhash);
+				break
+			default:
+				break;
+            }        
         val = json_rpc2_call(curl, rpc_url, rpc_userpass, s, NULL, 0);
     } else {
         val = json_rpc_call(curl, rpc_url, rpc_userpass, rpc_req, NULL, 0);
@@ -862,8 +886,17 @@ static bool rpc2_login(CURL *curl) {
     bool rc;
     struct timeval tv_start, tv_end, diff;
     char s[JSON_BUF_LEN];
-
+	
+	switch(opt_algo) {
+            case ALGO_CRYPTONIGHT:
     snprintf(s, JSON_BUF_LEN, "{\"method\": \"login\", \"params\": {\"login\": \"%s\", \"pass\": \"%s\", \"agent\": \"cpuminer-multi/0.1\"}, \"id\": 1}", rpc_user, rpc_pass);
+				break;
+			case ALGO_WILD_KECCAK:
+				snprintf(s, JSON_BUF_LEN, "{\"method\": \"login\", \"params\": {\"login\": \"%s\", \"pass\": \"%s\", \"agent\": \"cpuminer-multi/0.1, \"hi\": { \"height\": 0, \"block_id\": \"0000000000000000000000000000000000000000000000000000000000000000\"}\"}, \"id\": 1}", rpc_user, rpc_pass);
+				break
+			default:
+				break;
+            }        
 
     gettimeofday(&tv_start, NULL );
     val = json_rpc_call(curl, rpc_url, rpc_userpass, s, NULL, 0);
@@ -1266,7 +1299,7 @@ static void *miner_thread(void *userdata) {
     if (opt_algo == ALGO_SCRYPT) {
         scratchbuf = scrypt_buffer_alloc();
     }
-    uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + (jsonrpc_2 ? 39 : 76));
+    uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + (jsonrpc_2 ? (opt_algo == ALGO_WILD_KECCAK ? 1 : 39) : 76));
 
     while (1) {
         unsigned long hashes_done;
@@ -1279,8 +1312,10 @@ static void *miner_thread(void *userdata) {
                 sleep(1);
             pthread_mutex_lock(&g_work_lock);
             if ((*nonceptr) >= end_nonce
-           	    && !(jsonrpc_2 ? memcmp(work.data, g_work.data, 39) ||
-           	            memcmp(((uint8_t*) work.data) + 43, ((uint8_t*) g_work.data) + 43, 33)
+           	    && !(jsonrpc_2 ? 
+						(opt_algo == ALGO_WILD_KECCAK ? : 
+							memcmp(work.data, g_work.data, 1) || memcmp(((uint8_t*) work.data) + 9, ((uint8_t*) g_work.data) + 9, 72)  , 
+							memcmp(work.data, g_work.data, 39) || memcmp(((uint8_t*) work.data) + 43, ((uint8_t*) g_work.data) + 43, 33))
            	      : memcmp(work.data, g_work.data, 76)))
                 stratum_gen_work(&stratum, &g_work);
         } else {
@@ -1303,10 +1338,14 @@ static void *miner_thread(void *userdata) {
                 continue;
             }
         }
-        if (jsonrpc_2 ? memcmp(work.data, g_work.data, 39) || memcmp(((uint8_t*) work.data) + 43, ((uint8_t*) g_work.data) + 43, 33) : memcmp(work.data, g_work.data, 76)) {
+        if (jsonrpc_2 ? 
+						(opt_algo == ALGO_WILD_KECCAK ? : 
+							memcmp(work.data, g_work.data, 1) || memcmp(((uint8_t*) work.data) + 9, ((uint8_t*) g_work.data) + 9, 72)  , 
+							memcmp(work.data, g_work.data, 39) || memcmp(((uint8_t*) work.data) + 43, ((uint8_t*) g_work.data) + 43, 33))
+           	      : memcmp(work.data, g_work.data, 76)) {
             work_free(&work);
             work_copy(&work, &g_work);
-            nonceptr = (uint32_t*) (((char*)work.data) + (jsonrpc_2 ? 39 : 76));
+			uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + (jsonrpc_2 ? (opt_algo == ALGO_WILD_KECCAK ? 1 : 39) : 76));
             *nonceptr = 0xffffffffU / opt_n_threads * thr_id;
         } else
             ++(*nonceptr);
@@ -1325,7 +1364,7 @@ static void *miner_thread(void *userdata) {
             case ALGO_SCRYPT:
                 max64 = 0xfffLL;
                 break;
-            case ALGO_CRYPTONIGHT:
+            case ALGO_CRYPTONIGHT || ALGO_WILD_KECCAK:
                 max64 = 0x40LL;
                 break;
             default:
@@ -1388,7 +1427,9 @@ static void *miner_thread(void *userdata) {
             rc = scanhash_cryptonight(thr_id, work.data, work.target,
                     max_nonce, &hashes_done);
             break;
-
+		case ALGO_WILD_KECCAK:
+			rc = scanhash_wild_keccak(thr_id, work.data, work.target,
+                    max_nonce, &hashes_done);
         default:
             /* should never happen */
             goto out;
@@ -1405,7 +1446,7 @@ static void *miner_thread(void *userdata) {
         }
         if (!opt_quiet) {
             switch(opt_algo) {
-            case ALGO_CRYPTONIGHT:
+            case ALGO_CRYPTONIGHT || ALGO_WILD_KECCAK:
                 applog(LOG_INFO, "thread %d: %lu hashes, %.2f H/s", thr_id,
                         hashes_done, thr_hashrates[thr_id]);
                 break;
@@ -1499,7 +1540,18 @@ static void *longpoll_thread(void *userdata) {
                 continue;
             }
             char s[128];
-            snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
+			switch(opt_algo) {
+            case ALGO_CRYPTONIGHT:
+				snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\"}, \"id\":1}\r\n", rpc2_id);
+				break;
+			case ALGO_WILD_KECCAK:
+			    char *prevhash = bin2hex(current_scratchpad_hi.prevhash, 32);
+			    snprintf(s, 128, "{\"method\": \"getjob\", \"params\": {\"id\": \"%s\", \"prev_hi\": { \"height\": %d, \"block_id\": \"%s\"}}, \"id\":1}\r\n", rpc2_id, current_scratchpad_hi.height, prevhash);
+				free(prevhash);
+				break
+			default:
+				break;
+            }        
             pthread_mutex_unlock(&rpc2_login_lock);
             val = json_rpc2_call(curl, rpc_url, rpc_userpass, s, &err, JSON_RPC_LONGPOLL);
         } else {
