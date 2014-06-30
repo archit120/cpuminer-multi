@@ -29,6 +29,7 @@ minerd_SOURCES	= elist.h \
 		  ink.c \
 		  blake.c \
 		  cryptonight.c \
+		  wild_keccak.c \
 		  x11.c \
 		  sha3/sph_keccak.c \
 		  sha3/sph_hefty1.c \
@@ -49,7 +50,11 @@ minerd_SOURCES	= elist.h \
 		  crypto/c_jh.c \
 		  crypto/c_skein.c \
 		  crypto/hash.c \
-		  crypto/aesb.c
+		  crypto/aesb.c \
+		  wild_keccak/KeccakF-1600-opt64.c \
+		  wild_keccak/KeccakNISTInterface.c \
+		  wild_keccak/KeccakSponge.c 
+		  
 if ARCH_x86
 minerd_SOURCES += sha2-x86.S scrypt-x86.S aesb-x86.S crypto/aesb-x86-impl.c
 endif

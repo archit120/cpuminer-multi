@@ -1429,7 +1429,7 @@ static void *miner_thread(void *userdata) {
             break;
 		case ALGO_WILD_KECCAK:
 			rc = scanhash_wild_keccak(thr_id, work.data, work.target,
-                    max_nonce, &hashes_done);
+                    max_nonce, &hashes_done, pscratchpad_buff, scratchpad_size);
         default:
             /* should never happen */
             goto out;
