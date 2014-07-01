@@ -160,18 +160,14 @@ int longpoll_thr_id = -1;
 int stratum_thr_id = -1;
 struct work_restart *work_restart = NULL;
 static struct stratum_ctx stratum;
-static char rpc2_id[64] = "";
+char rpc2_id[64] = "";
 static char *rpc2_blob = NULL;
 static int rpc2_bloblen = 0;
 static uint32_t rpc2_target = 0;
 static char *rpc2_job_id = NULL;
 
 #define WILD_KECCAK_SCRATCHPAD_BUFFSIZE  1000000000  //100MB
-struct scratchpad_hi
-{
-  unsigned char prevhash[32];
-  uint64_t height;
-};
+
 struct addendum
 {
     	struct scratchpad_hi hi;
@@ -299,6 +295,7 @@ static struct option const options[] = {
 static struct work g_work;
 static time_t g_work_time;
 static pthread_mutex_t g_work_lock;
+static pthread_mutex_t g_scratchpad_lock;
 
 static bool rpc2_login(CURL *curl);
 static void workio_cmd_free(struct workio_cmd *wc);
@@ -460,6 +457,8 @@ bool rpc2_job_decode(const json_t *job, struct work *work) {
     }
     if(work) {
         if (!rpc2_blob) {
+			
+			
             applog(LOG_ERR, "Requested work before work was received");
             goto err_out;
         }
@@ -476,7 +475,7 @@ bool rpc2_job_decode(const json_t *job, struct work *work) {
     return false;
 }
 
-static bool work_decode(const json_t *val, struct work *work) {
+bool work_decode(const json_t *val, struct work *work) {
     int i;
 
     if(jsonrpc_2) {
@@ -972,9 +971,9 @@ static bool rpc2_login(CURL *curl) {
 
 	// The first job is a bunch of useless information because of 0 height info
 	
-	if(opt_algo == ALGO_WILD_KECCAK)
+	if(opt_algo != ALGO_WILD_KECCAK)
 	{
-		
+		applog(LOG_DEBUG, "DEBUG: Not using WILDKECCAK")
 		json_t *job = json_object_get(result, "job");
 
 		if(!rpc2_job_decode(job, &g_work)) {
@@ -1170,18 +1169,18 @@ static void *workio_thread(void *userdata) {
     }
 
 
-        struct workio_cmd *wc;
 
-    if(opt_algo == ALGO_WILD_KECCAK) {
+  /*  if(opt_algo == ALGO_WILD_KECCAK) {
       ok = workio_getscratchpad(curl);
 	  //Get the work now!
 	  ok = workio_get_work(wc, curl);
-    }
+    }*/
 
 
 
     while (ok) {
 
+        struct workio_cmd *wc;
 
         /* wait for workio_cmd sent to us, on our queue */
         wc = tq_pop(mythr->q, NULL );
@@ -1369,6 +1368,13 @@ static void *miner_thread(void *userdata) {
     uint32_t *nonceptr = (uint32_t*) (((char*)work.data) + (jsonrpc_2 ? (opt_algo == ALGO_WILD_KECCAK ? 1 : 39) : 76));
 
     while (1) {
+	
+		if(opt_algo == ALGO_WILD_KECCAK)
+		{
+			pthread_mutex_lock(&rpc2_getscratchpad_lock);
+			pthread_mutex_unlock(&rpc2_getscratchpad_lock);
+			// wait for scratchpad
+		}
         unsigned long hashes_done;
         struct timeval tv_start, tv_end, diff;
         int64_t max64;
@@ -1749,7 +1755,26 @@ static void *stratum_thread(void *userdata) {
                 sleep(opt_fail_pause);
             }
         }
+		if(opt_algo == ALGO_WILD_KECCAK && !scratchpad_size)
+		{                
+			if(stratum_getscratchpad(&stratum))
+			{
+				applog(LOG_INFO, "Fetched scratchpad, getting first job");
+				if(stratum_getjob_wildkeccak(&stratum,  &g_work, current_scratchpad_hi) {
+					applog(LOG_INFO, "Got first job");
+				}
 
+			}
+			else
+			{
+				stratum_disconnect(&stratum);
+				applog(LOG_ERR, "...retry after %d seconds", opt_fail_pause);
+				sleep(opt_fail_pause);
+			}			
+			pthread_mutex_unlock(&rpc2_getscratchpad_lock);
+
+		}
+ 
         if (jsonrpc_2) {
             if (stratum.work.job_id
                     && (!g_work_time
@@ -2122,7 +2147,7 @@ int main(int argc, char *argv[]) {
         applog(LOG_INFO, "Using JSON-RPC 2.0");
     } else if(opt_algo == ALGO_WILD_KECCAK) {
       jsonrpc_2 = true;
-      applog(LOG_INFO, "Using JSON-RPC 2.0");
+      applog(LOG_INFO, "Using JSON-RPC 2.0 with Wild Keccak");
       pscratchpad_buff = malloc(WILD_KECCAK_SCRATCHPAD_BUFFSIZE);
       if(!pscratchpad_buff)
       {
@@ -2259,6 +2284,8 @@ int main(int argc, char *argv[]) {
         if (have_stratum)
             tq_push(thr_info[stratum_thr_id].q, strdup(rpc_url));
     }
+	
+	pthread_mutex_lock(&rpc2_getscratchpad_lock);
 
     /* start mining threads */
     for (i = 0; i < opt_n_threads; i++) {
